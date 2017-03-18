@@ -16,56 +16,30 @@ import subprocess
 import math
 
 
-def _generate_grace_param_file(structure_name, ligand_name, replicate, xthreshold= None , ythreshold= None):
-    with open("grace_params.txt", 'w') as fh:
-        if xthreshold:
-            print >> fh, "WORLD XMAX %s" % xthreshold
-        if ythreshold:
-            print >> fh, "WORLD YMAX %s" % ythreshold
-        # print >> fh, "WORLD YMAX 5.0"
-        print >> fh, "WORLD YMIN 0.0"
-        print >> fh, "VIEW XMAX 1.2"
-        print >> fh, "PAGE RESIZE 3000, 2000"
-        print >> fh, 'TITLE "%s, %s, MD replicate - %s"' % (structure_name, ligand_name, replicate)
-        # print >> fh, 'SUBTITLE "Ligand-Protein atom distances"'
-        print >> fh, "LEGEND LOCTYPE WORLD"
-        print >> fh, "LEGEND ON"
-        print >> fh, "LEGEND 0.0, %s" % ythreshold
-        print >> fh, "LEGEND CHAR SIZE .7"
-        print >> fh, 'DEVICE "JPEG" DPI 200'
-        print >> fh, 'HARDCOPY DEVICE "JPEG"'
-
-def _get_max_value(filename):
-    """
-    Read an xvg file and find the maximum y value. Use this to automatically set a max y-axes value.
-    """
-    max_value = 0.0
-    with open(filename, 'r') as fh:
-        data = [line.strip().split()[1:] for line in fh.readlines()][50:] # assume the file is more than 50 lines
-        for line in data:
-            if max_value < max(map(float, line)):
-                max_value = max(map(float, line))
-    return max_value
-
-
-
 # OVERWRITE_IMAGES = False
 STARTING_FRAME_RMSF = 30000
 SKIP_AMOUNT = 1
 
 OVERWRITE_RMSF = False
 OVERWRITE_RMSD = False
+OVERWRITE_LIGAND_RMSD = False
 OVERWRITE_BINDING_POCKET_RMSD = False
 OVERWRITE_LIGAND_PROTEIN_DISTANCES = False
 OVERWRITE_PDB = False
-OVERWRITE_LASTFRAME = True
+OVERWRITE_LASTFRAME = False
 OVERWRITE_NOPBC = False
+OVERWRITE_CLUSTERING = False
+SS_BACKBONE = True # use secondary structure backbone residues only. Requires defined index file
 
 # OVERWRITE_RESULTS_FOR_STRUCTURES = ["poly3_FDVFFFVV", "poly3_FDVFVGDV", "poly3_FVVFFCLV"]
-OVERWRITE_RESULTS_FOR_STRUCTURES = []
+OVERWRITE_RESULTS_FOR_STRUCTURES = [] #["3G0I", "3G02"]
 
 # OVERWRITE_LIG_DISTANCES_FOR_STRUCTURES = ["poly3_FDVFFFVV", "poly3_FDVFVGDV", "poly3_FVVFFCLV"]
 OVERWRITE_LIG_DISTANCES_FOR_STRUCTURES = []
+OVERWRITE_CLUSTERING_FOR_STRUCTURES = ["3G02"]
+
+
+TAG = "SS_fitted"
 
 for filename in os.listdir("."):
     if os.path.isdir(filename) and "free" not in filename:
@@ -75,39 +49,59 @@ for filename in os.listdir("."):
         full_structure_rmsf_filenames = []
         base_dir = filename + "/"
         structure_name = filename.split("/")[-1]
-        if structure_name != "3G0I": continue
-        for ligand_name in ["S_GPE", "R_GPE"]:
+        if structure_name != "3G0I" and structure_name != "3G02": continue
+        #if structure_name != "3G02": continue
+        #for ligand_name in ["S_GPE", "R_GPE"]:
+        for ligand_name in ["S_GPE_crystal_water_gromacs_333", "R_GPE_crystal_water_gromacs_333"]:
+            if structure_name != "3G02" and ligand_name != "R_GPE_crystal_water_gromacs_333": continue
             cur_dir = base_dir + ligand_name
+            xtc_list_for_clustering = []
             for MDdir in [dir for dir in os.listdir(cur_dir) if dir.startswith("MD")]:
                 md_dir = cur_dir + "/" + MDdir + "/"
                 print cur_dir + "/" + MDdir #, [(rep,step) for trr in os.listdir(md_dir) for rep,step in trr.split("_") if trr.endswith("trr")]
+                # Get trajectory filenames
                 trr_filenames = [mdfile for mdfile in os.listdir(md_dir) if mdfile.endswith(".trr")]
                 full_trr_filesnames = [md_dir + trrfn for trrfn in trr_filenames]
                 max_step = 1
+                if not os.path.exists("%scluster_files/" % md_dir):
+                    subprocess.call("mkdir %scluster_files/" % md_dir, shell = True)
                 for trr_file in trr_filenames:
                     split_trr_filename = trr_file.split("_")
+                    if "backup" in trr_file: continue
                     replicate, step = split_trr_filename[0][-1], split_trr_filename[1].split(".")[0]
                     if int(step) > max_step: max_step = int(step)
                 time_threshold = max_step # Currently limiting max x-axis value. 
                 if max_step > 50:
                     time_threshold = 50
+                
                 # Join the separate trajectory files together
                 # We remove the trr -> xtc file for space reasons. If the noPBC xtc does not exist, we will re-concatenate
                 if not os.path.exists("%smd%s_1-%s.xtc" % (md_dir, replicate, max_step)) and \
                 not os.path.exists("%smd%s_1-%s_noPBC.xtc" % (md_dir, replicate, max_step)) \
                     or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
                     subprocess.call("gmx_d trjcat -f %s -tu ns -xvg xmgrace -o %smd%s_1-%s.xtc" % (" ".join(full_trr_filesnames), md_dir, replicate, max_step), shell=True)
-                #
-                if not os.path.exists("%smd%s_1-%s_noPBC.xtc" % (md_dir, replicate, max_step)) or OVERWRITE_NOPBC or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
-                    # subprocess.call("echo 16 | gmx_d trjconv -f %smd%s_1-%s.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC.xtc -pbc mol -ur compact" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step), shell = True)
-                    subprocess.call("echo 16 | gmx_d trjconv -f %smd%s_1-%s.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC.xtc -pbc mol -ur compact -skip %i" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step, SKIP_AMOUNT), shell = True)
-                    # whole
-                    # nojump
-                    subprocess.call("rm %smd%s_1-%s.xtc" % (md_dir, replicate, max_step), shell = True)
 
+                if not os.path.exists("%smd%s_1-%s_noPBC_fitted.xtc" % (md_dir, replicate, max_step)) or OVERWRITE_NOPBC or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
+                    subprocess.call("echo 16 | gmx_d trjconv -f %smd%s_1-%s.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_whole.xtc -pbc whole -ur compact -skip %i" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step, SKIP_AMOUNT), shell = True)
+                    subprocess.call("echo 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_whole.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_nojump.xtc -ur compact -pbc nojump" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step), shell = True)
+                    # 1 = center to protein, 16 - output non-water
+                    subprocess.call("echo 1 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_nojump.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_center.xtc  -ur compact -center" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step), shell = True)
+                    # 4/17 = fit to backbone/secondary structure backbone, 16 - output non-water
+                    if SS_BACKBONE:
+                        subprocess.call("echo 17 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_center.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_fitted.xtc -ur compact -fit progressive -n %s_SS_residues.ndx" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step, structure_name), shell = True)
+                    else:
+                        subprocess.call("echo 4 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_center.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_fitted.xtc -ur compact -fit progressive" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step), shell = True)
+                    # subprocess.call("rm %smd%s_1-%s.xtc" % (md_dir, replicate, max_step), shell = True)
+                if structure_name == "3G02" and replicate == "1" and "R_GPE" in ligand_name:
+                    subprocess.call("echo 17 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_center.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_fitted.xtc -ur compact -fit progressive -n %s_SS_residues.ndx -e 35000" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step, structure_name), shell = True)
+                xtc_list_for_clustering.append(("%smd%s_1-%s_noPBC_fitted.xtc" % (md_dir, replicate, max_step), max_step))
+
+                if not os.path.exists("%scluster_files/md%s_1-%s_clusters.pdb" % (md_dir,replicate,max_step)) or OVERWRITE_CLUSTERING or structure_name in OVERWRITE_CLUSTERING_FOR_STRUCTURES:
+                    subprocess.call("echo 13 16 | gmx_d cluster -f %smd%s_1-%s_noPBC_fitted.xtc -s %smd%s_1.tpr -cl %scluster_files/md%s_1-%s_clusters.pdb -g %scluster_files/cluster.log -o %scluster_files/md%s_1-%s_clusters.xpm -dist %scluster_files/md%s_1-%s_cluster_dists.xvg -ntr %scluster_files/md%s_1-%s_cluster_trans.xvg -cutoff 0.75 -method gromos -fit no"  % (md_dir, replicate, max_step, md_dir, replicate, md_dir, replicate, max_step, md_dir, md_dir, replicate, max_step, md_dir, replicate, max_step, md_dir, replicate, max_step), shell = True)
+
+                # Generate pdb from trajectory
                 if not os.path.exists("%smd%s_1-%s.pdb" % (md_dir, replicate, max_step)) or OVERWRITE_PDB or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
-                    subprocess.call("echo 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC.xtc -s %smd%s_1.tpr -o %smd%s_1-%s.pdb -pbc mol -ur compact" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate, max_step), shell = True)
-                
+                    subprocess.call("echo 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_fitted.xtc -s %smd%s_1.tpr -o %smd%s_1-%s.pdb" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate, max_step), shell = True)
                 # Extracts the last frame
                 try:
                     last_frame_filename = "%s%s_%s_md%s_1-%s_last_frame.pdb" % (md_dir, structure_name, ligand_name, replicate, max_step)
@@ -116,140 +110,75 @@ for filename in os.listdir("."):
                         subprocess.call("sed -ne '/^TITLE/,/^ENDMDL/{/^TITLE/{x;d};H}' -e '${x;p}' %smd%s_1-%s.pdb > %s" % (md_dir, replicate, max_step, last_frame_filename), shell = True)
                 except:
                     print "Failed to extract last frame"
+                
                 try:
-                    # Calculate the RMSD of carbon alpha in the whole structure
+                    # Calculate the RMSD of backbone in the whole structure or defined secondary structure
                     structure_rmsd_filename = "%s%s_%s_md%s_1-%s_rmsd.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
                     full_structure_rmsd_filenames.append(structure_rmsd_filename)
                     if not os.path.exists(structure_rmsd_filename) or OVERWRITE_RMSD or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
-                        # Carbon Alpha - Carbon Alpha
-                        # subprocess.call("echo 3 3 | gmx_d rms -s %smd%s_1.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -tu ns -e %s" % (md_dir, replicate,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000), shell = True)
-                        # Backbone - Backbone
-                        # subprocess.call("echo 4 4 | gmx_d rms -s %smd%s_1.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -tu ns -e %i" % (md_dir, replicate,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000), shell = True)
-                        subprocess.call("echo 4 4 | gmx_d rms -s %s../EM/em.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -tu ns -e %i" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000), shell = True)
+                        if SS_BACKBONE:
+                            subprocess.call("echo 17 17 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i -n %s_SS_residues.ndx" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
+                        else:
+                            subprocess.call("echo 4 4 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000), shell = True)
                 except Exception, e:
                     print str(e)
                     print "Failed to generate structure rmsd"
 
                 try:
-                    # Calculate residue fluctuations (RMSF)
-                    # structure_rmsf_filename = "%smd%s_1-%s_rmsf.xvg" % (md_dir, replicate, max_step)
-                    structure_rmsf_filename = "%s%s_%s_md%s_1-%s_rmsf.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
-                    full_structure_rmsf_filenames.append(structure_rmsf_filename)
-                    if not os.path.exists(structure_rmsf_filename) or OVERWRITE_RMSF or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
-                        # Carbon alpha rmsf
-                        # subprocess.call("echo 3 | gmx_d rmsf -s %smd%s_1.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -e %s -res yes" % (md_dir, replicate,  md_dir, replicate, max_step, structure_rmsf_filename, time_threshold * 1000), shell = True)
-                        # Backbone rmsf
-                        # subprocess.call("echo 4 | gmx_d rmsf -s %smd%s_1.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -e %i -res yes -b %i" % (md_dir, replicate,  md_dir, replicate, max_step, structure_rmsf_filename, time_threshold * 1000, STARTING_FRAME_RMSF), shell = True)
-
-                        # Carbon alpha rmsf makes more sense for rmsf
-                        subprocess.call("echo 3 | gmx_d rmsf -s %s../EM/em.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -e %i -res yes -b %i" % (md_dir,  md_dir, replicate, max_step, structure_rmsf_filename, time_threshold * 1000, STARTING_FRAME_RMSF), shell = True)
-                    # Generate RMSF plot
-                    # structure_rmsf_jpg_filename = "%s%s_%s_md%s_1-%s_rmsf.jpg" % (md_dir, structure_name, ligand_name, replicate, max_step)
-
-                    # if not os.path.exists(structure_rmsf_jpg_filename) or OVERWRITE_IMAGES:
-                    #     # Generate grace parameter file
-                    #     y_threshold = str(_get_max_value(structure_rmsf_filename) * 1.1)
-                    #     _generate_grace_param_file(structure_name, ligand_name, replicate, time_threshold * 1000, y_threshold)
-                    #     subprocess.call("grace -nxy %s -autoscale xy -printfile %s -hardcopy -param grace_params.txt" % (structure_rmsf_filename, structure_rmsf_jpg_filename), shell = True)
+                    # Calculate the RMSD of ligand based on whole structure backbone fit or defined secondary structure
+                    structure_ligand_rmsd_filename = "%s%s_%s_md%s_1-%s_ligand_rmsd.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
+                    full_structure_rmsd_filenames.append(structure_rmsd_filename)
+                    if not os.path.exists(structure_ligand_rmsd_filename) or OVERWRITE_LIGAND_RMSD or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
+                        if SS_BACKBONE:
+                            subprocess.call("echo 17 13 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i -n %s_SS_residues.ndx" % (md_dir,  md_dir, replicate, max_step, structure_ligand_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
+                        else:
+                            subprocess.call("echo 4 13 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i" % (md_dir,  md_dir, replicate, max_step, structure_ligand_rmsd_filename, time_threshold * 1000), shell = True)
                 except Exception, e:
                     print str(e)
-                    print "Failed to generate structure rmsf"
+                    print "Failed to generate ligand rmsd"
 
-                try:
-                    # Calculate the RMSD of residues around the binding pocket. Assumes the appropriate index file exists in base directory.
-                    # binding_pocket_rmsd_filename = "%smd%s_1-%s_binding_pocket_rmsd.xvg" % (md_dir, replicate, max_step)
-                    binding_pocket_rmsd_filename = "%s%s_%s_md%s_1-%s_binding_pocket_rmsd.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
-                    binding_pocket_rmsd_filenames.append(binding_pocket_rmsd_filename)
-                    if not os.path.exists(binding_pocket_rmsd_filename) or OVERWRITE_BINDING_POCKET_RMSD or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
-                        # subprocess.call("echo 17 17 | gmx_d rms -s %smd%s_1.tpr -f %smd%s_1-%s_noPBC.xtc -o %smd%s_1-%s_binding_pocket_rmsd.xvg -tu ns -e %s -n binding_pocket_ndx.ndx" % (md_dir, replicate,  md_dir, replicate, max_step, md_dir, replicate,max_step, time_threshold * 1000), shell = True)
-                        # subprocess.call("echo 17 17 | gmx_d rms -s %smd%s_1.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -tu ns -e %s -n %s_binding_pocket_ndx.ndx" % (md_dir, replicate,  md_dir, replicate, max_step, binding_pocket_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
-                        subprocess.call("echo 17 17 | gmx_d rms -s %s../EM/em.tpr -f %smd%s_1-%s_noPBC.xtc -o %s -tu ns -e %s -n %s_binding_pocket_ndx.ndx" % (md_dir,  md_dir, replicate, max_step, binding_pocket_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
+                # try:
+                #     # Calculate residue fluctuations (RMSF)
+                #     structure_rmsf_filename = "%s%s_%s_md%s_1-%s_rmsf.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
+                #     full_structure_rmsf_filenames.append(structure_rmsf_filename)
+                #     if not os.path.exists(structure_rmsf_filename) or OVERWRITE_RMSF or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
+                #         # Carbon alpha rmsf makes more sense for rmsf
+                #         subprocess.call("echo 3 | gmx_d rmsf -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -e %i -res yes -b %i" % (md_dir,  md_dir, replicate, max_step, structure_rmsf_filename, time_threshold * 1000, STARTING_FRAME_RMSF), shell = True)
+                # except Exception, e:
+                #     print str(e)
+                #     print "Failed to generate structure rmsf"
 
-                    # Set maximum y axis value
-                    # y_threshold = str(_get_max_value(binding_pocket_rmsd_filename) * 1.1)
-                    # binding_pocket_jpg_filename = "%s%s_%s_md%s_1-%s_binding_pocket_rmsd.jpg" % (md_dir, structure_name, ligand_name, replicate, max_step)
-
-                    # Grace must be installed to path for this to work
-                    # if not os.path.exists(binding_pocket_jpg_filename) or OVERWRITE_IMAGES:
-                        #Generate grace parameter file
-                        # _generate_grace_param_file(structure_name, ligand_name, replicate, time_threshold * 1000, y_threshold)
-                        # subprocess.call("grace -nxy %s -autoscale xy -printfile %s -hardcopy -param grace_params.txt" % (binding_pocket_rmsd_filename, binding_pocket_jpg_filename), shell = True)
-                except Exception, e:
-                    print str(e)
+                # try:
+                #     # Calculate the RMSD of residues around the binding pocket. Assumes the appropriate index file exists in base directory.
+                #     # binding_pocket_rmsd_filename = "%smd%s_1-%s_binding_pocket_rmsd.xvg" % (md_dir, replicate, max_step)
+                #     binding_pocket_rmsd_filename = "%s%s_%s_md%s_1-%s_binding_pocket_rmsd.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
+                #     binding_pocket_rmsd_filenames.append(binding_pocket_rmsd_filename)
+                #     if not os.path.exists(binding_pocket_rmsd_filename) or OVERWRITE_BINDING_POCKET_RMSD or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
+                #         subprocess.call("echo 17 17 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %s -n %s_binding_pocket_ndx.ndx" % (md_dir,  md_dir, replicate, max_step, binding_pocket_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
+                # except Exception, e:
+                #     print str(e)
 
                 try:
                     # Generates the average distances for the ligand-protein reaction critical atoms
-                    # View with `xmgrace -nxy outputfilename.xvg
-                    # distances_xvg_filename = "%smd%s_1-%s_ligand_protein_distances.xvg" % (md_dir, replicate, max_step)
                     distances_xvg_filename = "%s%s_%s_md%s_1-%s_ligand_protein_distances.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
                     if not os.path.exists(distances_xvg_filename) or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES or structure_name in OVERWRITE_LIG_DISTANCES_FOR_STRUCTURES:
-                        subprocess.call("gmx_d distance -f %smd%s_1-%s_noPBC.xtc -s %smd%s_%s.tpr -n %s_ligand_protein_catalytic_atoms.ndx -oav %s -tu ns -select 17 18 19 20 -e %s" % \
+                        subprocess.call("gmx_d distance -f %smd%s_1-%s_noPBC_fitted.xtc -s %smd%s_%s.tpr -n %s_ligand_protein_catalytic_atoms.ndx -oav %s -tu ns -select 17 18 19 20 21 22 -e %s" % \
                                                                 (md_dir, replicate, max_step, md_dir, replicate, max_step, structure_name, distances_xvg_filename, time_threshold * 1000), shell = True)
-                                                # subprocess.call("gmx_d distance -f %smd%s_1-%s_noPBC.xtc -s %smd%s_%s.tpr -n %s_ligand_protein_catalytic_atoms.ndx -oall %s -tu ns -select 17 18 19 20 -e %s" % \
-                                                #                 (md_dir, replicate, max_step, md_dir, replicate, max_step, structure_name, distances_xvg_filename, time_threshold * 1000), shell = True)
-                    # # Set maximum y axis value
-                    # y_threshold = str(math.ceil(_get_max_value(distances_xvg_filename)) * 1.1)
-
-                    # # Generate grace parameter file
-                    # _generate_grace_param_file(structure_name, ligand_name, replicate, 40, y_threshold)
-
-                    # # Generates jpgs of distance rmsd plots
-                    # distances_jpg_filename = "%s%s_%s_md%s_1-%s_distances.jpg" % (md_dir, structure_name, ligand_name, replicate, max_step)
-
-                    # # Grace must be installed to path for this to work
-                    # if not os.path.exists(distances_jpg_filename) or OVERWRITE_IMAGES:
-                    #     subprocess.call("grace -nxy %s -autoscale xy -printfile %s -hardcopy -param grace_params.txt" % (distances_xvg_filename, distances_jpg_filename), shell = True)
                 except Exception, e:
                     print str(e)
                     print "Failed to generate ligand-protein distances / distance plot"
-        # try:
-        #     # Generate joint rmsd plots for binding pocket and full structure.
-        #     # Generate joint rsmf plots for full structure
-        #     # One plot for each pair of ligands and their duplicates
-        #     binding_pocket_joint_jpg_filename = "%s%s_binding_pocket_rmsd.jpg" % (base_dir, structure_name)
-        #     structure_joint_jpg_filename = "%s%s_rmsd.jpg" % (base_dir, structure_name)
-        #     structure_joint_rmsf_jpg_filename = "%s%s_rmsf.jpg" % (base_dir, structure_name)
-            
-        #     if not os.path.exists(binding_pocket_joint_jpg_filename) or not os.path.exists(structure_joint_jpg_filename) or OVERWRITE_IMAGES:
-        #         # Find the max value over all rmsd files
-        #         binding_pocket_max_y = 0.0
-        #         structure_max_y = 0.0
-        #         structure_rmsf_max_y = 0.0
-        #         for bp_filename in binding_pocket_rmsd_filenames:
-        #             value = _get_max_value(bp_filename)
-        #             if value > binding_pocket_max_y:
-        #                 binding_pocket_max_y = value
+            # Generate single cluster for all trajectories
+            if not os.path.exists("%s/%s_cluster_files/" % (cur_dir, structure_name)):
+                subprocess.call("mkdir %s/%s_cluster_files/" % (cur_dir, structure_name), shell = True)
+            str_xtc_list = " ".join([x[0] for x in xtc_list_for_clustering])
+            str_xtc_frame_steps = " ".join([str(x[1] * 1000) for x in xtc_list_for_clustering])
+            print "clustering these files - ", str_xtc_list
+            if not os.path.exists("%s/%s_cluster_files/%s_noPBC_fitted_for_clustering.xtc" % (cur_dir, structure_name, structure_name)) or OVERWRITE_CLUSTERING or structure_name in OVERWRITE_CLUSTERING_FOR_STRUCTURES:
+                frame_steps = []
+                subprocess.call("gmx_d trjcat -f %s -o %s/%s_cluster_files/%s_noPBC_fitted_for_clustering.xtc -cat" % (str_xtc_list, cur_dir, structure_name,structure_name), shell = True)
 
-        #         for struc_filename in full_structure_rmsd_filenames:
-        #             value = _get_max_value(struc_filename)
-        #             if value > structure_max_y:
-        #                 structure_max_y = value
-
-        #         # for struc_filename in full_structure_rmsf_filenames:
-        #         #     value = _get_max_value(struc_filename)
-        #         #     if value > structure_rmsf_max_y:
-        #         #         structure_rmsf_max_y = value
-        #         # binding_pocket_max_y = str((math.ceil(binding_pocket_max_y)) * 1.1)
-        #         # structure_max_y = str((math.ceil(structure_max_y)) * 1.1)
-
-        #         # Generate grace parameter file for binding pocket results
-        #         _generate_grace_param_file(structure_name, "S/R-GPE", "1,2", 40, binding_pocket_max_y)
-
-        #         subprocess.call("grace -nxy %s -autoscale xy -printfile %s -hardcopy -param grace_params.txt" % (" ".join(binding_pocket_rmsd_filenames), binding_pocket_joint_jpg_filename), shell = True)
-
-        #         # Generate grace parameter file for binding pocket results
-        #         _generate_grace_param_file(structure_name, "S/R-GPE", "1,2", 40, structure_max_y)
-        #         subprocess.call("grace -nxy %s -autoscale xy -printfile %s -hardcopy -param grace_params.txt" % (" ".join(full_structure_rmsd_filenames), structure_joint_jpg_filename), shell = True)
-
-        #         # TODO: joint rmsf plots
-        #         _generate_grace_param_file(structure_name, "S/R-GPE", "1,2")
-        #         subprocess.call("grace %s -printfile %s -hardcopy -hdevice JPEG -param grace_params.txt" % (" ".join(full_structure_rmsf_filenames), structure_joint_rmsf_jpg_filename), shell = True)                
-
-
-        # except Exception, e:
-        #     print str(e)
-        #     print "Failed to generate joint rmsd plots"
-
+            if not os.path.exists("%s/%s_cluster_files/%s_clusters.pdb" % (cur_dir,structure_name,structure_name)) or OVERWRITE_CLUSTERING:
+                subprocess.call("echo 13 16 | gmx_d cluster -f %s/%s_cluster_files/%s_noPBC_fitted_for_clustering.xtc  -s %s/PR/pr_corrected.gro -cl %s/%s_cluster_files/%s_clusters.pdb -g %s/%s_cluster_files/%s_cluster.log -o %s/%s_cluster_files/%s_clusters.xpm -dist %s/%s_cluster_files/%s_cluster_dists.xvg -ntr %s/%s_cluster_files/%s_cluster_trans.xvg -cutoff 0.75 -method gromos -fit no" %  (cur_dir,structure_name,structure_name, cur_dir, cur_dir, structure_name, structure_name,cur_dir, structure_name, structure_name,cur_dir, structure_name, structure_name, cur_dir, structure_name, structure_name, cur_dir, structure_name, structure_name), shell = True)
 
 
 
