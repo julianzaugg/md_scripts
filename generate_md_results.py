@@ -7,7 +7,8 @@ This was originally written for liganding binding MD analysis (hence the `S/R GP
 Assumes a number of index files were available.
 Folder heirarchy was - `script_base_directory -> Structure_directory -> Ligand_directory -> MD_replicate_directory'
 
-I would just use this script for `inspiration' in writing your own.
+
+`Should' handle most gromacs 3.3.3 / 5.1.2 analyses.
 """
 
 import os, sys
@@ -21,7 +22,7 @@ STARTING_FRAME_RMSF = 30000
 SKIP_AMOUNT = 1
 
 OVERWRITE_RMSF = False
-OVERWRITE_RMSD = False
+OVERWRITE_RMSD = True
 OVERWRITE_LIGAND_RMSD = False
 OVERWRITE_BINDING_POCKET_RMSD = False
 OVERWRITE_LIGAND_PROTEIN_DISTANCES = False
@@ -32,18 +33,17 @@ OVERWRITE_CLUSTERING = False
 SS_BACKBONE = True # use secondary structure backbone residues only. Requires defined index file
 
 # OVERWRITE_RESULTS_FOR_STRUCTURES = ["poly3_FDVFFFVV", "poly3_FDVFVGDV", "poly3_FVVFFCLV"]
-OVERWRITE_RESULTS_FOR_STRUCTURES = [] #["3G0I", "3G02"]
+OVERWRITE_RESULTS_FOR_STRUCTURES = [] #["3G02"]
 
 # OVERWRITE_LIG_DISTANCES_FOR_STRUCTURES = ["poly3_FDVFFFVV", "poly3_FDVFVGDV", "poly3_FVVFFCLV"]
 OVERWRITE_LIG_DISTANCES_FOR_STRUCTURES = []
-OVERWRITE_CLUSTERING_FOR_STRUCTURES = ["3G02"]
+OVERWRITE_CLUSTERING_FOR_STRUCTURES = [] #["3G02", "3G0I"]
 
 
 TAG = "SS_fitted"
 
 for filename in os.listdir("."):
     if os.path.isdir(filename) and "free" not in filename:
-        # TODO : collect individual rmsd filenames for binding pocket and full protein. Generate combined plots for these and write to file
         binding_pocket_rmsd_filenames = []
         full_structure_rmsd_filenames = []
         full_structure_rmsf_filenames = []
@@ -53,9 +53,21 @@ for filename in os.listdir("."):
         #if structure_name != "3G02": continue
         #for ligand_name in ["S_GPE", "R_GPE"]:
         for ligand_name in ["S_GPE_crystal_water_gromacs_333", "R_GPE_crystal_water_gromacs_333"]:
-            if structure_name != "3G02" and ligand_name != "R_GPE_crystal_water_gromacs_333": continue
+            #if structure_name != "3G02": continue 
+            if ligand_name != "R_GPE_crystal_water_gromacs_333": continue
             cur_dir = base_dir + ligand_name
             xtc_list_for_clustering = []
+            # Determine cluster cut-off
+            # clustering_cut_off = "1.0"
+            clustering_cut_off = "0.3"
+            # if structure_name == "3G0I" and "R_GPE" in ligand_name:
+            #     clustering_cut_off = "0.7"
+            # elif structure_name == "3G0I" and "S_GPE" in ligand_name:
+            #     clustering_cut_off = "1.0"
+            # elif structure_name == "3G02" and "R_GPE" in ligand_name:
+            #     clustering_cut_off = "0.35"
+            # elif structure_name == "3G02" and "S_GPE" in ligand_name:
+            #     clustering_cut_off = "0.35"
             for MDdir in [dir for dir in os.listdir(cur_dir) if dir.startswith("MD")]:
                 md_dir = cur_dir + "/" + MDdir + "/"
                 print cur_dir + "/" + MDdir #, [(rep,step) for trr in os.listdir(md_dir) for rep,step in trr.split("_") if trr.endswith("trr")]
@@ -92,12 +104,45 @@ for filename in os.listdir("."):
                     else:
                         subprocess.call("echo 4 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_center.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_fitted.xtc -ur compact -fit progressive" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step), shell = True)
                     # subprocess.call("rm %smd%s_1-%s.xtc" % (md_dir, replicate, max_step), shell = True)
-                if structure_name == "3G02" and replicate == "1" and "R_GPE" in ligand_name:
-                    subprocess.call("echo 17 16 | gmx_d trjconv -f %smd%s_1-%s_noPBC_center.xtc -s %smd%s_1.tpr -o %smd%s_1-%s_noPBC_fitted.xtc -ur compact -fit progressive -n %s_SS_residues.ndx -e 35000" % (md_dir,replicate,max_step, md_dir, replicate, md_dir,replicate,max_step, structure_name), shell = True)
+
+                # Complex 3G02:RGPE run 1 needs to be clustered only from 1-35000
+                if structure_name == "XXXXXXX" and replicate == "1" and "R_GPE" in ligand_name:
+                    subprocess.call("echo 17 16 | gmx_d trjconv \
+                        -f %smd%s_1-%s_noPBC_center.xtc \
+                        -s %smd%s_1.tpr \
+                        -o %smd%s_1-%s_noPBC_fitted.xtc \
+                        -ur compact \
+                        -fit progressive \
+                        -n %s_SS_residues.ndx \
+                        -e 35000" % (
+                            md_dir,
+                            replicate,max_step, 
+                            md_dir, 
+                            replicate, 
+                            md_dir,replicate,
+                            max_step, 
+                            structure_name), shell = True)
                 xtc_list_for_clustering.append(("%smd%s_1-%s_noPBC_fitted.xtc" % (md_dir, replicate, max_step), max_step))
 
                 if not os.path.exists("%scluster_files/md%s_1-%s_clusters.pdb" % (md_dir,replicate,max_step)) or OVERWRITE_CLUSTERING or structure_name in OVERWRITE_CLUSTERING_FOR_STRUCTURES:
-                    subprocess.call("echo 13 16 | gmx_d cluster -f %smd%s_1-%s_noPBC_fitted.xtc -s %smd%s_1.tpr -cl %scluster_files/md%s_1-%s_clusters.pdb -g %scluster_files/cluster.log -o %scluster_files/md%s_1-%s_clusters.xpm -dist %scluster_files/md%s_1-%s_cluster_dists.xvg -ntr %scluster_files/md%s_1-%s_cluster_trans.xvg -cutoff 0.75 -method gromos -fit no"  % (md_dir, replicate, max_step, md_dir, replicate, md_dir, replicate, max_step, md_dir, md_dir, replicate, max_step, md_dir, replicate, max_step, md_dir, replicate, max_step), shell = True)
+                    subprocess.call("echo 13 16 | gmx_d cluster \
+                        -f %smd%s_1-%s_noPBC_fitted.xtc \
+                        -s %smd%s_1.tpr \
+                        -cl %scluster_files/md%s_1-%s_clusters.pdb \
+                        -g %scluster_files/cluster.log \
+                        -o %scluster_files/md%s_1-%s_clusters.xpm \
+                        -dist %scluster_files/md%s_1-%s_cluster_dists.xvg \
+                        -ntr %scluster_files/md%s_1-%s_cluster_trans.xvg \
+                        -cutoff %s -method gromos \
+                        -fit no"  % (
+                            md_dir, replicate, max_step, 
+                            md_dir, replicate, 
+                            md_dir, replicate, max_step,
+                            md_dir, 
+                            md_dir, replicate, max_step, 
+                            md_dir, replicate, max_step, 
+                            md_dir, replicate, max_step, 
+                            clustering_cut_off), shell = True)
 
                 # Generate pdb from trajectory
                 if not os.path.exists("%smd%s_1-%s.pdb" % (md_dir, replicate, max_step)) or OVERWRITE_PDB or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
@@ -110,14 +155,13 @@ for filename in os.listdir("."):
                         subprocess.call("sed -ne '/^TITLE/,/^ENDMDL/{/^TITLE/{x;d};H}' -e '${x;p}' %smd%s_1-%s.pdb > %s" % (md_dir, replicate, max_step, last_frame_filename), shell = True)
                 except:
                     print "Failed to extract last frame"
-                
                 try:
                     # Calculate the RMSD of backbone in the whole structure or defined secondary structure
                     structure_rmsd_filename = "%s%s_%s_md%s_1-%s_rmsd.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
                     full_structure_rmsd_filenames.append(structure_rmsd_filename)
                     if not os.path.exists(structure_rmsd_filename) or OVERWRITE_RMSD or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
                         if SS_BACKBONE:
-                            subprocess.call("echo 17 17 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i -n %s_SS_residues.ndx" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
+                            subprocess.call("echo 17 17 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i -n %s_not_fluc_residues.ndx" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
                         else:
                             subprocess.call("echo 4 4 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000), shell = True)
                 except Exception, e:
@@ -177,8 +221,24 @@ for filename in os.listdir("."):
                 frame_steps = []
                 subprocess.call("gmx_d trjcat -f %s -o %s/%s_cluster_files/%s_noPBC_fitted_for_clustering.xtc -cat" % (str_xtc_list, cur_dir, structure_name,structure_name), shell = True)
 
-            if not os.path.exists("%s/%s_cluster_files/%s_clusters.pdb" % (cur_dir,structure_name,structure_name)) or OVERWRITE_CLUSTERING:
-                subprocess.call("echo 13 16 | gmx_d cluster -f %s/%s_cluster_files/%s_noPBC_fitted_for_clustering.xtc  -s %s/PR/pr_corrected.gro -cl %s/%s_cluster_files/%s_clusters.pdb -g %s/%s_cluster_files/%s_cluster.log -o %s/%s_cluster_files/%s_clusters.xpm -dist %s/%s_cluster_files/%s_cluster_dists.xvg -ntr %s/%s_cluster_files/%s_cluster_trans.xvg -cutoff 0.75 -method gromos -fit no" %  (cur_dir,structure_name,structure_name, cur_dir, cur_dir, structure_name, structure_name,cur_dir, structure_name, structure_name,cur_dir, structure_name, structure_name, cur_dir, structure_name, structure_name, cur_dir, structure_name, structure_name), shell = True)
+            if not os.path.exists("%s/%s_cluster_files/%s_clusters.pdb" % (cur_dir,structure_name,structure_name)) or OVERWRITE_CLUSTERING or structure_name in OVERWRITE_CLUSTERING_FOR_STRUCTURES:
+                subprocess.call("echo 13 16 | gmx_d cluster \
+                    -f %s/%s_cluster_files/%s_noPBC_fitted_for_clustering.xtc  \
+                    -s %s/PR/pr_corrected.gro \
+                    -cl %s/%s_cluster_files/%s_clusters.pdb \
+                    -g %s/%s_cluster_files/%s_cluster.log \
+                    -o %s/%s_cluster_files/%s_clusters.xpm \
+                    -dist %s/%s_cluster_files/%s_cluster_dists.xvg \
+                    -ntr %s/%s_cluster_files/%s_cluster_trans.xvg \
+                    -cutoff %s -method gromos -fit no" %  (
+                            cur_dir, structure_name, structure_name, 
+                            cur_dir, 
+                            cur_dir, structure_name, structure_name,
+                            cur_dir, structure_name, structure_name,
+                            cur_dir, structure_name, structure_name, 
+                            cur_dir, structure_name, structure_name, 
+                            cur_dir, structure_name, structure_name, 
+                            clustering_cut_off), shell = True)
 
 
 
