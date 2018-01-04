@@ -30,6 +30,10 @@ OVERWRITE_PDB = False
 OVERWRITE_LASTFRAME = False
 OVERWRITE_NOPBC = False
 OVERWRITE_CLUSTERING = False
+
+# Currently we superimpose the complexes based on secondary structure, however
+# for the RMSD calculation we currently calculate based on residues with low RMSF fluctuations.
+# One could go back after seeing the initial fluctuation results and re-fit on low fluctuating residues.
 SS_BACKBONE = True # use secondary structure backbone residues only. Requires defined index file
 
 # OVERWRITE_RESULTS_FOR_STRUCTURES = ["poly3_FDVFFFVV", "poly3_FDVFVGDV", "poly3_FVVFFCLV"]
@@ -156,12 +160,12 @@ for filename in os.listdir("."):
                 except:
                     print "Failed to extract last frame"
                 try:
-                    # Calculate the RMSD of backbone in the whole structure or defined secondary structure
+                    # Calculate the RMSD of backbone in the whole structure or defined secondary structure EDIT - 22/8/17 now calculate by residues with low RMSDs
                     structure_rmsd_filename = "%s%s_%s_md%s_1-%s_rmsd.xvg" % (md_dir, structure_name, ligand_name, replicate, max_step)
                     full_structure_rmsd_filenames.append(structure_rmsd_filename)
                     if not os.path.exists(structure_rmsd_filename) or OVERWRITE_RMSD or structure_name in OVERWRITE_RESULTS_FOR_STRUCTURES:
                         if SS_BACKBONE:
-                            subprocess.call("echo 17 17 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i -n %s_not_fluc_residues.ndx" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
+                            subprocess.call("echo 17 17 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i -n %s_not_fluctating_residues_removed_noncontinguous.ndx" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000, structure_name), shell = True)
                         else:
                             subprocess.call("echo 4 4 | gmx_d rms -s %s../PR/pr_corrected.gro -f %smd%s_1-%s_noPBC_fitted.xtc -o %s -tu ns -e %i" % (md_dir,  md_dir, replicate, max_step, structure_rmsd_filename, time_threshold * 1000), shell = True)
                 except Exception, e:
